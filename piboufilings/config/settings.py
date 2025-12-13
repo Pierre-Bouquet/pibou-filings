@@ -41,4 +41,3 @@ LOG_HEADERS = [
 
 # Create necessary directories
 DATA_DIR.mkdir(exist_ok=True)
-LOGS_DIR.mkdir(exist_ok=True) 

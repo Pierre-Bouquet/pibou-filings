@@ -33,7 +33,7 @@ from .rate_limiter import GlobalRateLimiter
 class SECDownloader:
     """A class to handle downloading SEC EDGAR filings."""
     
-    def __init__(self, user_name: str, user_agent_email: str, package_version: str = "0.2.1", log_dir: str = "./logs", max_workers: int = 5):
+    def __init__(self, user_name: str, user_agent_email: str, package_version: str = "0.3.0", log_dir: str = "./logs", max_workers: int = 5):
         """
         Initialize the SEC downloader.
         
@@ -165,12 +165,16 @@ class SECDownloader:
                         return None
                             
                     accession_number = accession_match.group(1)
+
+                    detected_form_type = form_type
+                    if "Form Type" in filing and pd.notna(filing["Form Type"]):
+                        detected_form_type = str(filing["Form Type"]).strip() or form_type
                     
                     # Download the filing
                     filing_info = self._download_single_filing(
                         cik=cik,
                         accession_number=accession_number,
-                        form_type=form_type,
+                        form_type=detected_form_type,
                         save_raw=save_raw
                     )
                     
@@ -401,18 +405,25 @@ class SECDownloader:
         else:
             output_dir = form_dir
         
+        # Create an accession-specific directory for SEC file number storage to avoid overwrites
+        accession_specific_dir = output_dir
+        if "13F" in form_type and form_13f_file_number_for_path and form_13f_file_number_for_path != "unknown_13F_file_number":
+            safe_accession_dir = accession_number.replace('/', '_')
+            accession_specific_dir = os.path.join(output_dir, safe_accession_dir)
+            os.makedirs(accession_specific_dir, exist_ok=True)
+        
         # Determine filename based on form type
         filename: str
         if "13F" in form_type and form_13f_file_number_for_path and form_13f_file_number_for_path != "unknown_13F_file_number":
             # Sanitize form_13f_file_number_for_path for use as a filename
-            sane_form_13f_fn_for_file = form_13f_file_number_for_path.replace('/', '_') # Fewer replacements needed for filename usually
-            filename = f"{sane_form_13f_fn_for_file}.txt"
+            sane_form_13f_fn_for_file = form_13f_file_number_for_path.replace('/', '_')
+            filename = f"{sane_form_13f_fn_for_file}_{accession_number}.txt"
         else:
             # Sanitize form_type for filename
             sane_form_type = form_type.replace('/', '_')
             filename = f"{cik}_{sane_form_type}_{accession_number}.txt"
             
-        output_path = os.path.join(output_dir, filename)
+        output_path = os.path.join(accession_specific_dir, filename)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(content)
         

@@ -43,3 +43,5 @@ Thumbs.db
 /data_parse
 demo_local.ipynb
 /data_parsed
+/my_sec_data
+/my_sec_logs

@@ -12,11 +12,9 @@ import requests
 
 from .core.downloader import SECDownloader
 from .core.logger import FilingLogger
-from .core.parser import SECFilingParser  # For backward compatibility
-# Import the new restructured parsers
 from .parsers.form_13f_parser import Form13FParser
 from .parsers.form_nport_parser import FormNPORTParser
-from .parsers.parser_utils import get_parser_for_form_type, validate_filing_content
+from .parsers.parser_utils import validate_filing_content
 from .config.settings import DATA_DIR
 
 try:
@@ -25,7 +23,7 @@ except ImportError:
     try:
         from .version import __version__ as package_version
     except ImportError:
-        package_version = "0.2.1" # Fallback
+        package_version = "0.3.0" # Fallback
 
 
 ### IF YOU'RE BUILDING A NEW PARSER, YOU'LL NEED TO UPDATE THIS FUNCTION ###
@@ -144,6 +142,14 @@ def process_filings_for_cik(current_cik, downloaded, form_type, base_dir, logger
             
             # Parse the filing using the new parser structure
             parsed_data = parser.parse_filing(content)
+            filing_url = filing.get("url")
+            if 'filing_info' in parsed_data and not parsed_data['filing_info'].empty:
+                filing_info_df = parsed_data['filing_info'].copy()
+                if 'SEC_FILING_URL' not in filing_info_df.columns:
+                    filing_info_df['SEC_FILING_URL'] = pd.NA
+                filing_info_df['SEC_FILING_URL'] = filing_info_df['SEC_FILING_URL'].astype('object')
+                filing_info_df.loc[:, 'SEC_FILING_URL'] = filing_url if filing_url else pd.NA
+                parsed_data['filing_info'] = filing_info_df
             
             # Save parsed data according to parser type
             if isinstance(parser, Form13FParser):
@@ -235,7 +241,7 @@ def get_filings(
     log_dir: str = "./logs",
     show_progress: bool = True,
     max_workers: int = 5,
-    keep_raw_files: bool = False
+    keep_raw_files: bool = True
 ) -> None:
     """
     Download and parse SEC filings for one or more companies and form types.
@@ -591,12 +597,11 @@ def get_filings(
         download_error_message=f"Finished get_filings. CIKs: {cik}, Forms: {form_type}, Years: {start_year}-{end_year}"
     )
 
-__version__ = "0.2.2" # Incremented version due to new feature
+__version__ = "0.3.0"
 __all__ = [
     "get_filings", 
     "SECDownloader", 
     "FilingLogger", 
     "Form13FParser",
-    "FormNPORTParser",
-    "SECFilingParser"  # For backward compatibility
+    "FormNPORTParser"
 ]

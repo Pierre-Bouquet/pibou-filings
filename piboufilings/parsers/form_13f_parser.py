@@ -6,7 +6,7 @@ Updated to merge company and filing info into single 13f_info.csv file.
 import pandas as pd
 import re
 import xml.etree.ElementTree as ET
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 from pathlib import Path
 import os
 
@@ -34,20 +34,30 @@ class Form13FParser:
         }
         
         filing_info_df = result['filing_info']
-        form_13f_file_number = None
-        if not filing_info_df.empty and 'FORM_13F_FILE_NUMBER' in filing_info_df.columns:
-            form_13f_file_number_val = filing_info_df['FORM_13F_FILE_NUMBER'].iloc[0]
-            if pd.notna(form_13f_file_number_val):
-                form_13f_file_number = str(form_13f_file_number_val)
-            else:
-                form_13f_file_number = "unknown_file_number" # Default if NA
-        else:
-            form_13f_file_number = "unknown_file_number" # Default if column missing or df empty
+        form_13f_file_number = "unknown_file_number"
+        cik_value = None
+        if not filing_info_df.empty:
+            if 'FORM_13F_FILE_NUMBER' in filing_info_df.columns:
+                form_13f_file_number_val = filing_info_df['FORM_13F_FILE_NUMBER'].iloc[0]
+                if pd.notna(form_13f_file_number_val):
+                    form_13f_file_number = str(form_13f_file_number_val)
+            if 'CIK' in filing_info_df.columns:
+                cik_val = filing_info_df['CIK'].iloc[0]
+                if pd.notna(cik_val):
+                    cik_str = str(int(cik_val)) if isinstance(cik_val, (int, float)) and not isinstance(cik_val, bool) else str(cik_val)
+                    cik_value = cik_str.zfill(10)
 
         # Extract and parse holdings
         xml_data, date = self._extract_xml(content) # No accession here
         if xml_data and date and form_13f_file_number:
             result['holdings'] = self._parse_holdings(xml_data, form_13f_file_number, date)
+        
+        result['other_managers_reporting'] = self._parse_other_managers_reporting(
+            content, cik_value, form_13f_file_number
+        )
+        result['other_included_managers'] = self._parse_other_included_managers(
+            content, cik_value, form_13f_file_number
+        )
         
         return result
     
@@ -66,37 +76,41 @@ class Form13FParser:
                 master_name = f"13f_holdings.csv"
                 master_file_path = self.output_dir / master_name
                 
-                # Remove CUSIP before saving
-                if 'CUSIP' in df_to_save.columns:
-                    df_to_save = df_to_save.drop(columns=['CUSIP'])
-                
                 # Rename FORM_13F_FILE_NUMBER to SEC_FILE_NUMBER for the CSV output
                 if 'FORM_13F_FILE_NUMBER' in df_to_save.columns:
                     df_to_save = df_to_save.rename(columns={'FORM_13F_FILE_NUMBER': 'SEC_FILE_NUMBER'})
 
                 # Do NOT add CIK from the parameter to the holdings CSV
 
-                if not os.path.exists(master_file_path):
-                    df_to_save.to_csv(master_file_path, index=False)
-                else:
-                    df_to_save.to_csv(master_file_path, mode='a', header=False, index=False)
+                self._write_dataframe(master_file_path, df_to_save)
             
             elif data_type == "filing_info":
                 master_name = f"13f_info.csv"
                 master_file_path = self.output_dir / master_name
 
-                # Remove CIK before saving
-                if 'CIK' in df_to_save.columns:
-                    df_to_save = df_to_save.drop(columns=['CIK'])
-                
                 # Rename FORM_13F_FILE_NUMBER to SEC_FILE_NUMBER for the CSV output
                 if 'FORM_13F_FILE_NUMBER' in df_to_save.columns:
                     df_to_save = df_to_save.rename(columns={'FORM_13F_FILE_NUMBER': 'SEC_FILE_NUMBER'})
 
-                if not os.path.exists(master_file_path):
-                    df_to_save.to_csv(master_file_path, index=False)
-                else:
-                    df_to_save.to_csv(master_file_path, mode='a', header=False, index=False)
+                self._write_dataframe(master_file_path, df_to_save)
+            
+            elif data_type == "other_managers_reporting":
+                master_file_path = self.output_dir / "13f_other_managers_reporting.csv"
+                self._write_dataframe(master_file_path, df_to_save)
+            
+            elif data_type == "other_included_managers":
+                master_file_path = self.output_dir / "13f_other_included_managers.csv"
+                self._write_dataframe(master_file_path, df_to_save)
+
+    def _write_dataframe(self, file_path: Path, df_to_save: pd.DataFrame) -> None:
+        """Append DataFrame rows to a CSV file with automatic deduplication."""
+        if file_path.exists():
+            existing_df = pd.read_csv(file_path)
+            combined_df = pd.concat([existing_df, df_to_save], ignore_index=True)
+            combined_df = combined_df.drop_duplicates()
+            combined_df.to_csv(file_path, index=False)
+        else:
+            df_to_save.to_csv(file_path, index=False)
     
     def _parse_filing_info(self, content: str) -> pd.DataFrame:
         """Extract comprehensive filing and company information from 13F filing in one unified method."""
@@ -112,6 +126,9 @@ class Form13FParser:
             "ACCEPTANCE_DATETIME": (r"ACCEPTANCE-DATETIME>\s*(\d+)", pd.NA),
             "PUBLIC_DOCUMENT_COUNT": (r"PUBLIC DOCUMENT COUNT:\s+(\d+)", pd.NA),
             "SEC_ACT": (r"SEC ACT:\s+([^\r\n]+)", pd.NA),
+            "STANDARD_INDUSTRIAL_CLASSIFICATION": (
+                r"STANDARD INDUSTRIAL CLASSIFICATION:\s+([^\r\n]+)", pd.NA
+            ),
             "FILM_NUMBER": (r"FILM NUMBER:\s+(\d+)", pd.NA),
             "NUMBER_TRADES": (r"tableEntryTotal>(\d+)</", pd.NA),
             "TOTAL_VALUE": (r"tableValueTotal>(\d+)</", pd.NA),
@@ -169,6 +186,8 @@ class Form13FParser:
                 "BUSINESS_PHONE", "MAIL_CITY", "MAIL_STREET_1", "STATE_INC",
                 "FORMER_COMPANY_NAME", "MAIL_ZIP", "BUSINESS_CITY", "MAIL_STATE",
                 "BUSINESS_STREET_2", "BUSINESS_ZIP", "FISCAL_YEAR_END",
+                "STANDARD_INDUSTRIAL_CLASSIFICATION",
+                "SEC_FILING_URL",
                 "CREATED_AT", "UPDATED_AT"  # Added timestamp columns
             ]
             
@@ -180,8 +199,10 @@ class Form13FParser:
             for col in date_columns:
                 if col in filing_info_df.columns:
                     filing_info_df[col] = pd.to_datetime(
-                        filing_info_df[col], format='%Y%m%d', errors='coerce')
-            
+                        filing_info_df[col], format='%Y%m%d', errors='coerce'
+                    ).dt.date
+                    filing_info_df[col] = filing_info_df[col].astype(str).replace('NaT', pd.NA)
+
             # Convert datetime columns
             if 'ACCEPTANCE_DATETIME' in filing_info_df.columns:
                 filing_info_df['ACCEPTANCE_DATETIME'] = pd.to_datetime(
@@ -218,6 +239,8 @@ class Form13FParser:
                 "BUSINESS_PHONE", "IRS_NUMBER", "MAIL_CITY", "MAIL_STREET_1", "STATE_INC",
                 "FORMER_COMPANY_NAME", "MAIL_ZIP", "BUSINESS_CITY", "MAIL_STATE",
                 "BUSINESS_STREET_2", "BUSINESS_ZIP", "FISCAL_YEAR_END",
+                "STANDARD_INDUSTRIAL_CLASSIFICATION",
+                "SEC_FILING_URL",
                 "CREATED_AT", "UPDATED_AT"  # Added timestamp columns
             ]
             empty_df = pd.DataFrame(columns=desired_columns)
@@ -391,6 +414,114 @@ class Form13FParser:
             
         except Exception as e:
             return pd.DataFrame()
+    
+    def _parse_other_managers_reporting(
+        self,
+        content: str,
+        cik: Optional[str],
+        parent_form_number: Optional[str]
+    ) -> pd.DataFrame:
+        """Parse the 'List of Other Managers Reporting for this Manager' section."""
+        columns = [
+            "CIK", "SEC_FILE_NUMBER", "RELATED_SEC_FILE_NUMBER",
+            "RELATED_MANAGER_NAME", "CREATED_AT", "UPDATED_AT"
+        ]
+        if not parent_form_number or parent_form_number == "unknown_file_number":
+            return pd.DataFrame(columns=columns)
+        
+        section_match = re.search(
+            r'List of Other Managers Reporting for this Manager:(.*?)(?:List of Other Included Managers|<PAGE>|</TEXT>|$)',
+            content,
+            re.IGNORECASE | re.DOTALL
+        )
+        if not section_match:
+            return pd.DataFrame(columns=columns)
+        
+        section_text = section_match.group(1)
+        lines = [line.strip() for line in section_text.splitlines()]
+        timestamp = pd.Timestamp.now()
+        cik_value = cik if cik else pd.NA
+        
+        entries: List[Dict[str, Any]] = []
+        for line in lines:
+            if not line or "Form 13F File Number" in line or line.startswith('['):
+                continue
+            manager_match = re.match(r'([0-9]{2,}-[0-9]+)\s+(.*\S)', line)
+            if manager_match:
+                entries.append({
+                    "CIK": cik_value,
+                    "SEC_FILE_NUMBER": parent_form_number,
+                    "RELATED_SEC_FILE_NUMBER": manager_match.group(1).strip(),
+                    "RELATED_MANAGER_NAME": manager_match.group(2).strip(),
+                    "CREATED_AT": timestamp,
+                    "UPDATED_AT": timestamp
+                })
+        
+        if not entries:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame(entries, columns=columns)
+    
+    def _parse_other_included_managers(
+        self,
+        content: str,
+        cik: Optional[str],
+        parent_form_number: Optional[str]
+    ) -> pd.DataFrame:
+        """Parse the 'List of Other Included Managers' section."""
+        columns = [
+            "CIK", "SEC_FILE_NUMBER", "MANAGER_NUMBER",
+            "RELATED_SEC_FILE_NUMBER", "RELATED_MANAGER_NAME",
+            "CREATED_AT", "UPDATED_AT"
+        ]
+        if not parent_form_number or parent_form_number == "unknown_file_number":
+            return pd.DataFrame(columns=columns)
+        
+        section_match = re.search(
+            r'List of Other Included Managers:(.*?)(?:<PAGE>|</TEXT>|$)',
+            content,
+            re.IGNORECASE | re.DOTALL
+        )
+        if not section_match:
+            return pd.DataFrame(columns=columns)
+        
+        section_text = re.sub(r'<[^>]+>', '', section_match.group(1))
+        lines = [line.rstrip() for line in section_text.splitlines()]
+        timestamp = pd.Timestamp.now()
+        cik_value = cik if cik else pd.NA
+        
+        entries: List[Dict[str, Any]] = []
+        current_entry: Optional[Dict[str, Any]] = None
+        pattern = re.compile(r'^(\d+)\.\s+([0-9\-]+)\s+(.*\S)$')
+        
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.upper().startswith('NO.') or 'FORM 13F' in line.upper():
+                continue
+            
+            match = pattern.match(line)
+            if match:
+                if current_entry:
+                    entries.append(current_entry)
+                current_entry = {
+                    "CIK": cik_value,
+                    "SEC_FILE_NUMBER": parent_form_number,
+                    "MANAGER_NUMBER": int(match.group(1)),
+                    "RELATED_SEC_FILE_NUMBER": match.group(2).strip(),
+                    "RELATED_MANAGER_NAME": match.group(3).strip(),
+                    "CREATED_AT": timestamp,
+                    "UPDATED_AT": timestamp
+                }
+            elif current_entry and not line.startswith('<'):
+                current_entry["RELATED_MANAGER_NAME"] = (
+                    f"{current_entry['RELATED_MANAGER_NAME']} {line.strip()}"
+                ).strip()
+        
+        if current_entry:
+            entries.append(current_entry)
+        
+        if not entries:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame(entries, columns=columns)
     
     def _get_xml_text(self, element, path: str, namespaces: dict) -> Optional[str]:
         """Safely extract text from XML element with namespace support."""
