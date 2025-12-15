@@ -2,11 +2,9 @@
 
 <h3 style="text-align: center;">A Python library to download, parse, and analyze SEC EDGAR filings at scale. </h3>
 
-
-[![PyPI version](https://badge.fury.io/py/piboufilings.svg)](https://badge.fury.io/py/piboufilings)
-[![License: Non-Commercial](https://img.shields.io/badge/License-Non_Commercial-blue.svg)](LICENCE)
-[![PyPI Downloads](https://static.pepy.tech/personalized-badge/piboufilings?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/piboufilings)
-
+[![PyPI](https://img.shields.io/pypi/v/piboufilings?color=blue)](https://pypi.org/project/piboufilings/)
+[![License](https://img.shields.io/badge/License-Non_Commercial-blue)](./LICENCE)
+[![Downloads](https://img.shields.io/pepy/dt/piboufilings?color=blue)](https://pepy.tech/projects/piboufilings)
 
 ## Filing Contents at a Glance
 
@@ -118,6 +116,7 @@ This structure lets you link back any security-level data to the registered fili
 <details>
 <summary> 13f_info.csv </summary>
 
+### `13f_info.csv`
 | Column | Description |
 | --- | --- |
 | `CIK` | Central Index Key for the registrant (10-digit, zero padded). |
@@ -174,6 +173,7 @@ This structure lets you link back any security-level data to the registered fili
 <details>
 <summary> nport_filing_info.csv </summary>
 
+### `nport_filing_info.csv`
 | Column | Description |
 | --- | --- |
 | `ACCESSION_NUMBER` | EDGAR accession number for the N-PORT filing. |
@@ -250,6 +250,7 @@ This structure lets you link back any security-level data to the registered fili
 <details>
 <summary> nport_holdings.csv </summary>
 
+### `nport_holdings.csv`
 | Column | Description |
 | --- | --- |
 | `ACCESSION_NUMBER` | Accession number of the N-PORT filing this holding comes from. |
@@ -291,6 +292,7 @@ This structure lets you link back any security-level data to the registered fili
 <details>
 <summary> sec16_info.csv </summary>
 
+### `sec16_info.csv`
 | Column | Description |
 | --- | --- |
 | `ACCESSION_NUMBER` | EDGAR accession number for the Section 16 filing. |
@@ -324,6 +326,7 @@ This structure lets you link back any security-level data to the registered fili
 <details>
 <summary> sec16_transactions.csv </summary>
 
+### `sec16_transactions.csv`
 | Column | Description |
 | --- | --- |
 | `ACCESSION_NUMBER` | Accession number of the filing this transaction comes from. |
@@ -359,6 +362,7 @@ This structure lets you link back any security-level data to the registered fili
 <details>
 <summary> sec16_holdings.csv </summary>
 
+### `sec16_holdings.csv`
 | Column | Description |
 | --- | --- |
 | `ACCESSION_NUMBER` | Accession number of the filing this holding comes from. |
