@@ -13,7 +13,7 @@ def test_section16_parser_with_real_filing(tmp_path):
     downloader = SECDownloader(
         user_name="Test Runner",
         user_agent_email="test@example.com",
-        package_version="0.3.0",
+        package_version="0.4.0",
         log_dir=tmp_path / "logs",
         max_workers=1,
         data_dir=tmp_path / "data_raw" / "test_raw",

@@ -90,7 +90,7 @@ class SECDownloader:
         self,
         user_name: str,
         user_agent_email: str,
-        package_version: str = "0.3.0",
+        package_version: str = "0.4.0",
         log_dir: Union[str, Path] = "./logs",
         max_workers: int = 5,
         data_dir: Union[str, Path] = DATA_DIR,

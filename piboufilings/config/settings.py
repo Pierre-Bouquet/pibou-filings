@@ -20,7 +20,7 @@ REQUEST_DELAY = 1 / SAFE_REQ_PER_SEC
 
 # HTTP settings (User-Agent is set at runtime with user-provided name/email)
 DEFAULT_HEADERS = {
-    "User-Agent": "piboufilings/0.3.0 (set-user-name; contact: set-email@example.com)"
+    "User-Agent": "piboufilings/0.4.0 (set-user-name; contact: set-email@example.com)"
 }
 
 # Retry settings

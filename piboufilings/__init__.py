@@ -24,7 +24,7 @@ except ImportError:
     try:
         from .version import __version__ as package_version
     except ImportError:
-        package_version = "0.3.0" # Fallback
+        package_version = "0.4.0" # Fallback
 
 
 SECTION16_ALIAS = "SECTION-6"
@@ -645,7 +645,7 @@ def get_filings(
         download_error_message=f"Finished get_filings. CIKs: {cik}, Forms: {form_type}, Years: {start_year}-{end_year}"
     )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "get_filings", 
     "SECDownloader", 
