@@ -18,6 +18,11 @@ setup(
         "lxml>=4.9.0",  # For XML parsing
         "python-dateutil>=2.8.2",  # For date parsing
     ],
+    extras_require={
+        "test": [
+            "pytest",
+        ],
+    },
     python_requires=">=3.8",  # Updated from >=3.7
     classifiers=[
         "Development Status :: 3 - Alpha",
