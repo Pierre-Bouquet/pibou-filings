@@ -36,8 +36,8 @@ USER_NAME = "Your Name or Company"  # Add your name or company
 get_filings(
     user_name=USER_NAME,
     user_agent_email=USER_AGENT_EMAIL,
-    cik="0001067983",               # Berkshire Hathaway CIK
-    form_type=["13F-HR", "NPORT-P"],# String or list of strings
+    cik="0001067983",               # Berkshire Hathaway CIK; None: download all available data
+    form_type=["13F-HR", "NPORT-P", "SECTION-6"],# String or list of strings
     start_year=2020,
     end_year=2025,
     base_dir="./my_sec_data",       # Optional: Custom directory for parsed CSVs
@@ -74,10 +74,11 @@ This structure lets you link back any security-level data to the registered fili
 
 ## Key Features
 
--   **Automated Downloads:** Fetch 13F and N-PORT filings by CIK, date range, or retrieve all available.
+-   **Automated Downloads:** Fetch 13F, N-PORT, and Section 16 filings (via alias `SECTION-6`) by CIK, date range, or retrieve all available.
 -   **Smart Parsing:**
     -   `Form13FParser`: Extracts detailed holdings and cover page data (including `IRS_NUMBER` and `SEC_FILE_NUMBER`) from 13F-HR filings.
     -   `FormNPORTParser`: Parses comprehensive fund/filer information (including `IRS_NUMBER` and `SEC_FILE_NUMBER`) and security holdings from N-PORT-P filings.
+    -   `FormSection16Parser`: Normalizes Section 16 ownership XML (Forms 3/4/5) into filing-, transaction-, and holdings-level DataFrames (backed by the `sec16_*.csv` outputs).
 -   **Structured CSV Output:**
     -   `13f_info.csv`: Filer information, summary fields, and a `SEC_FILING_URL` back to the original document.
     -   `13f_holdings.csv`: Aggregated holdings data from all processed 13F forms (including the reported CUSIP where available).
