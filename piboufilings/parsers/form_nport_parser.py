@@ -5,10 +5,9 @@ Separates filing/fund info from individual holdings to eliminate data duplicatio
 
 import pandas as pd
 import re
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 from lxml import etree
-import os
 
 
 class FormNPORTParser:
@@ -17,7 +16,6 @@ class FormNPORTParser:
     def __init__(self, output_dir: str = "./parsed_nport"):
         """Initialize parser with output directory."""
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def parse_filing(self, content: str) -> Dict[str, pd.DataFrame]:
         """
@@ -48,12 +46,22 @@ class FormNPORTParser:
             xml_data = self._extract_xml_data(content)
             if xml_data:
                 sec_file_number = None
+                accession_number = None
                 if not result['filing_info'].empty and 'SEC_FILE_NUMBER' in result['filing_info'].columns:
                     sec_file_number_val = result['filing_info']['SEC_FILE_NUMBER'].iloc[0]
                     if pd.notna(sec_file_number_val):
                         sec_file_number = str(sec_file_number_val)
+                if not result['filing_info'].empty and 'ACCESSION_NUMBER' in result['filing_info'].columns:
+                    accession_number_val = result['filing_info']['ACCESSION_NUMBER'].iloc[0]
+                    if pd.notna(accession_number_val):
+                        accession_number = str(accession_number_val)
 
-                result['holdings'] = self._parse_holdings_from_xml(xml_data, result['filing_info'], sec_file_number)
+                result['holdings'] = self._parse_holdings_from_xml(
+                    xml_data,
+                    result['filing_info'],
+                    sec_file_number,
+                    accession_number
+                )
         
         return result
     
@@ -71,8 +79,8 @@ class FormNPORTParser:
                     
 
                     expected_columns = [
-                        'PERIOD_OF_REPORT', 'FILED_DATE', 'SEC_FILE_NUMBER',
-                        'SECURITY_NAME', 'TITLE',
+                        'ACCESSION_NUMBER', 'CIK', 'PERIOD_OF_REPORT', 'FILED_DATE', 'SEC_FILE_NUMBER',
+                        'SECURITY_NAME', 'TITLE', 'CUSIP', 'LEI',
                         'BALANCE', 'UNITS', 'CURRENCY', 'VALUE_USD', 
                         'PCT_VALUE', 'PAYOFF_PROFILE', 'ASSET_CATEGORY', 'ISSUER_CATEGORY', 
                         'COUNTRY', 'IS_RESTRICTED', 'FAIR_VALUE_LEVEL', 'IS_CASH_COLLATERAL', 
@@ -97,33 +105,26 @@ class FormNPORTParser:
                             df_to_save[col] = df_to_save[col].astype(str).str.replace(r'[\r\n\t]', ' ', regex=True)
                             df_to_save[col] = df_to_save[col].str.replace(r'"', '""', regex=True)
                     
-                    filepath = self.output_dir / f"nport_holdings.csv"
+                    filepath = self.output_dir / "nport_holdings.csv"
                     
-                    # Drop CUSIP before saving
-                    if 'CUSIP' in df_to_save.columns:
-                        df_to_save = df_to_save.drop(columns=['CUSIP'])
-                    # Drop LEI before saving (general holding LEI)
-                    if 'LEI' in df_to_save.columns:
-                        df_to_save = df_to_save.drop(columns=['LEI'])
-                    # COUNTERPARTY_LEI is already removed from parsing and expected_columns
-                        
-                    if filepath.exists():
-                        df_to_save.to_csv(filepath, mode='a', header=False, index=False)
-                    else:
-                        df_to_save.to_csv(filepath, index=False)
+                    self._dedupe_append(
+                        filepath=filepath,
+                        df=df_to_save,
+                        key_cols=["ACCESSION_NUMBER", "SEC_FILE_NUMBER", "SECURITY_NAME", "TITLE", "BALANCE", "VALUE_USD"]
+                    )
             
             elif data_type == "filing_info":
                 if not df_to_save.empty:
                     
 
                     expected_columns = [
-                        'CIK', 'PERIOD_OF_REPORT', 'FILED_DATE', 'COMPANY_NAME', 'IRS_NUMBER',
+                        'ACCESSION_NUMBER', 'CIK', 'PERIOD_OF_REPORT', 'FILED_DATE', 'COMPANY_NAME', 'IRS_NUMBER',
                         'SEC_FILE_NUMBER', 'FILM_NUMBER', 'ACCEPTANCE_DATETIME', 'PUBLIC_DOCUMENT_COUNT',
                         'STATE_INC', 'FISCAL_YEAR_END', 'BUSINESS_STREET_1', 
                         'BUSINESS_STREET_2', 'BUSINESS_CITY', 'BUSINESS_STATE', 'BUSINESS_ZIP', 
                         'BUSINESS_PHONE', 'MAIL_STREET_1', 'MAIL_STREET_2', 'MAIL_CITY', 
                         'MAIL_STATE', 'MAIL_ZIP', 'FORMER_COMPANY_NAMES', 'REPORT_DATE', 
-                        'FUND_REG_NAME', 'FUND_FILE_NUMBER', 'SERIES_NAME', 'SERIES_LEI',
+                        'FUND_REG_NAME', 'FUND_FILE_NUMBER', 'FUND_LEI', 'SERIES_NAME', 'SERIES_LEI',
                         'REPORT_PERIOD_END', 'REPORT_PERIOD_DATE', 'IS_FINAL_FILING',
                         'FUND_TOTAL_ASSETS', 'FUND_TOTAL_LIABS', 'FUND_NET_ASSETS',
                         'ASSETS_ATTR_MISC_SEC', 'ASSETS_INVESTED', 'AMT_PAY_ONE_YR_BANKS_BORR', 
@@ -155,27 +156,20 @@ class FormNPORTParser:
                             df_to_save[col] = df_to_save[col].astype(str).str.replace(r'[\r\n\t]', ' ', regex=True)
                             df_to_save[col] = df_to_save[col].str.replace(r'"', '""', regex=True)
                     
-                    filepath = self.output_dir / f"nport_filing_info.csv"
+                    filepath = self.output_dir / "nport_filing_info.csv"
                     
-                    # Drop CIK before saving
-                    if 'CIK' in df_to_save.columns:
-                        df_to_save = df_to_save.drop(columns=['CIK'])
-                    # Drop FUND_LEI and SERIES_LEI before saving
-                    if 'FUND_LEI' in df_to_save.columns:
-                        df_to_save = df_to_save.drop(columns=['FUND_LEI'])
-                    if 'SERIES_LEI' in df_to_save.columns:
-                        df_to_save = df_to_save.drop(columns=['SERIES_LEI'])
-                        
-                    if filepath.exists():
-                        df_to_save.to_csv(filepath, mode='a', header=False, index=False)
-                    else:
-                        df_to_save.to_csv(filepath, index=False)
+                    self._dedupe_append(
+                        filepath=filepath,
+                        df=df_to_save,
+                        key_cols=["ACCESSION_NUMBER"] if "ACCESSION_NUMBER" in df_to_save.columns else ["CIK", "PERIOD_OF_REPORT", "SEC_FILE_NUMBER"]
+                    )
 
     def _parse_filing_info(self, content: str) -> pd.DataFrame:
         """Extract comprehensive filing, company, fund, and performance information."""
         # Core filing and company patterns
         patterns = {
-            # Core filing identification - ACCESSION_NUMBER removed
+            # Core filing identification
+            "ACCESSION_NUMBER": (r"ACCESSION NUMBER:\s+([\d\-]+)", pd.NA),
             "CIK": (r"CENTRAL INDEX KEY:\s+(\d+)", pd.NA),
             "FORM_TYPE": (r"CONFORMED SUBMISSION TYPE:\s+([\w\-]+)", pd.NA),
             "PERIOD_OF_REPORT": (r"CONFORMED PERIOD OF REPORT:\s+(\d+)", pd.NA),
@@ -238,8 +232,8 @@ class FormNPORTParser:
         try:
             # Define complete column order matching database schema
             desired_columns = [
-                # Core filing info - ACCESSION_NUMBER removed
-                "CIK", "FORM_TYPE", "PERIOD_OF_REPORT", "FILED_DATE",
+                # Core filing info
+                "ACCESSION_NUMBER", "CIK", "FORM_TYPE", "PERIOD_OF_REPORT", "FILED_DATE",
                 "SEC_FILE_NUMBER", "FILM_NUMBER", "ACCEPTANCE_DATETIME", "PUBLIC_DOCUMENT_COUNT",
                 
                 # Company info
@@ -386,7 +380,13 @@ class FormNPORTParser:
         
         return fund_info
 
-    def _parse_holdings_from_xml(self, xml_data: str, filing_info_df: pd.DataFrame, sec_file_number: Optional[str]) -> pd.DataFrame:
+    def _parse_holdings_from_xml(
+        self,
+        xml_data: str,
+        filing_info_df: pd.DataFrame,
+        sec_file_number: Optional[str],
+        accession_number: Optional[str]
+    ) -> pd.DataFrame:
         """Parse individual security holdings (security-specific data only)."""
         try:
             root = etree.fromstring(xml_data.encode('utf-8'))
@@ -401,12 +401,15 @@ class FormNPORTParser:
             # Retrieve FILED_DATE and use REPORT_DATE as PERIOD_OF_REPORT for holdings
             filed_date_val = filing_info_df['FILED_DATE'].iloc[0] if not filing_info_df.empty and 'FILED_DATE' in filing_info_df.columns else None
             period_of_report_val = filing_info_df['REPORT_DATE'].iloc[0] if not filing_info_df.empty and 'REPORT_DATE' in filing_info_df.columns else None
+            cik_val = filing_info_df['CIK'].iloc[0] if not filing_info_df.empty and 'CIK' in filing_info_df.columns else None
             
             # Parse each investment/security - ONLY security-specific data
             for inv in root.findall('.//nport:invstOrSec', namespaces):
                 holding = {
                     # Link to filing info - matching exact schema
                     'HOLDING_ID': None,  # Will be auto-generated in database
+                    'ACCESSION_NUMBER': accession_number,
+                    'CIK': cik_val,
                     'PERIOD_OF_REPORT': period_of_report_val, # Changed from REPORT_DATE
                     'FILED_DATE': filed_date_val, # Added
                     'SEC_FILE_NUMBER': sec_file_number,
@@ -526,6 +529,8 @@ class FormNPORTParser:
                 for inv in root.findall('.//invstOrSec'):
                     holding = {
                         'HOLDING_ID': None,
+                        'ACCESSION_NUMBER': accession_number,
+                        'CIK': cik_val,
                         'PERIOD_OF_REPORT': period_of_report_val,
                         'FILED_DATE': filed_date_val,
                         'SEC_FILE_NUMBER': sec_file_number,
@@ -651,6 +656,40 @@ class FormNPORTParser:
                     'YES': True, 'NO': False, '1': True, '0': False
                 })
 
+    def _dedupe_append(self, filepath: Path, df: pd.DataFrame, key_cols: List[str]) -> None:
+        """Write data to CSV with deduplication and CUSIP preference."""
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        columns = list(df.columns)
+        records: Dict[Any, Dict[str, Any]] = {}
+
+        def norm_key(row_dict: Dict[str, Any]) -> Any:
+            return tuple(None if pd.isna(row_dict.get(k, pd.NA)) else row_dict.get(k, pd.NA) for k in key_cols)
+
+        def prefer(new: Dict[str, Any], current: Dict[str, Any]) -> bool:
+            cur_cusip = current.get("CUSIP", pd.NA)
+            new_cusip = new.get("CUSIP", pd.NA)
+            return (pd.isna(cur_cusip) or cur_cusip in ("", None)) and (not pd.isna(new_cusip) and new_cusip not in ("", None))
+
+        def add_row(row_dict: Dict[str, Any]) -> None:
+            key = norm_key(row_dict)
+            existing = records.get(key)
+            if existing is None or prefer(row_dict, existing):
+                records[key] = row_dict
+
+        if filepath.exists():
+            for chunk in pd.read_csv(filepath, chunksize=50000):
+                for _, row in chunk.iterrows():
+                    add_row(row.to_dict())
+
+        for _, row in df.iterrows():
+            add_row(row.to_dict())
+
+        if not records:
+            return
+
+        pd.DataFrame(records.values()).reindex(columns=columns).to_csv(filepath, index=False)
+
     def _get_form_type(self, content: str) -> str:
         """Extract form type from content."""
         match = re.search(r"CONFORMED SUBMISSION TYPE:\s+([\w\-]+)", content)
@@ -745,4 +784,3 @@ def process_nport_directory(directory_path: str, output_dir: str = "./parsed_npo
         print(f"Processing: {file_path.name}")
         process_nport_filing(str(file_path), parser)
     
-

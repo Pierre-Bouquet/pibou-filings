@@ -1,8 +1,6 @@
-include LICENSE
+include LICENCE
 include README.md
 include pyproject.toml
-include demo.py
-include advanced_demo.py
 
 recursive-include piboufilings *.py
 recursive-include piboufilings/config *.json
@@ -14,5 +12,7 @@ global-exclude *.so
 global-exclude .DS_Store
 global-exclude .git
 global-exclude .gitignore
-global-exclude data_RAW/
-global-exclude logs/ 
+recursive-exclude my_sec_data *
+recursive-exclude my_sec_raw_data *
+recursive-exclude my_sec_logs *
+global-exclude logs/

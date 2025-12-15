@@ -10,10 +10,11 @@ from pathlib import Path
 from tqdm import tqdm
 import requests
 
-from .core.downloader import SECDownloader
+from .core.downloader import SECDownloader, resolve_io_paths, normalize_filters
 from .core.logger import FilingLogger
 from .parsers.form_13f_parser import Form13FParser
 from .parsers.form_nport_parser import FormNPORTParser
+from .parsers.form_sec16_parser import FormSection16Parser
 from .parsers.parser_utils import validate_filing_content
 from .config.settings import DATA_DIR
 
@@ -26,6 +27,18 @@ except ImportError:
         package_version = "0.3.0" # Fallback
 
 
+SECTION16_ALIAS = "SECTION-6"
+SECTION16_BASE_FORMS = ("3", "4", "5")
+
+
+def _normalize_form_type(form_type: str) -> str:
+    """Translate friendly aliases to SEC form identifiers used in filtering/downloading."""
+    if not form_type:
+        return form_type
+    # Keep the Section 16 alias intact so downstream logic can handle all 3/4/5 variants.
+    return SECTION16_ALIAS if form_type.upper() == SECTION16_ALIAS else form_type
+
+
 ### IF YOU'RE BUILDING A NEW PARSER, YOU'LL NEED TO UPDATE THIS FUNCTION ###
 def get_parser_for_form_type_internal(form_type: str, base_dir: str):
     """Get the appropriate parser for a form type using the new restructured parsers."""
@@ -36,6 +49,8 @@ def get_parser_for_form_type_internal(form_type: str, base_dir: str):
         return Form13FParser(output_dir=f"{base_dir}")
     elif "NPORT" in form_type:
         return FormNPORTParser(output_dir=f"{base_dir}")
+    elif form_type.upper() == SECTION16_ALIAS or form_type.upper().startswith(SECTION16_BASE_FORMS):
+        return FormSection16Parser(output_dir=f"{base_dir}")
     else:
         return None
 
@@ -163,6 +178,8 @@ def process_filings_for_cik(current_cik, downloaded, form_type, base_dir, logger
                 parser.save_parsed_data(parsed_data, form_13f_file_number_for_saving, cik)
             elif isinstance(parser, FormNPORTParser):
                 parser.save_parsed_data(parsed_data)
+            elif isinstance(parser, FormSection16Parser):
+                parser.save_parsed_data(parsed_data)
             else:
                 # Fallback or error for unknown parser types, though get_parser_for_form_type_internal should prevent this.
                 logger.log_operation(
@@ -237,8 +254,9 @@ def get_filings(
     form_type: Union[str, List[str]] = '13F-HR',
     start_year: int = None,
     end_year: Optional[int] = None,
-    base_dir: str = "./data_parsed",
-    log_dir: str = "./logs",
+    base_dir: Optional[str] = None,
+    log_dir: Optional[str] = None,
+    raw_data_dir: Optional[str] = None,
     show_progress: bool = True,
     max_workers: int = 5,
     keep_raw_files: bool = True
@@ -255,6 +273,7 @@ def get_filings(
         end_year: Ending year (defaults to current year)
         base_dir: Base directory for parsed data (defaults to './data_parsed')
         log_dir: Directory to store log files (defaults to './logs')
+        raw_data_dir: Base directory for raw filings (defaults to config DATA_DIR)
         show_progress: Whether to show progress bars (defaults to True)
         max_workers: Maximum number of parallel download workers (defaults to 5)
         keep_raw_files: If False, raw filing files will be deleted after processing for each CIK. Defaults to True (files are kept).
@@ -268,18 +287,24 @@ def get_filings(
     if end_year is None:
         end_year = start_year
         
-    # Convert base_dir to absolute path
-    base_dir = Path(base_dir).resolve()
+    # Resolve directories with env-aware defaults
+    base_dir, log_dir_path, raw_data_dir_path = resolve_io_paths(
+        base_dir=base_dir,
+        log_dir=log_dir,
+        raw_data_dir=raw_data_dir,
+        default_base=Path.cwd() / "data_parsed"
+    )
     
     # Initialize downloader and logger
     downloader = SECDownloader(
         user_name=user_name, 
         user_agent_email=user_agent_email, 
         package_version=package_version,
-        log_dir=log_dir, 
-        max_workers=max_workers
+        log_dir=log_dir_path, 
+        max_workers=max_workers,
+        data_dir=raw_data_dir_path
     )
-    logger = FilingLogger(log_dir=log_dir)
+    logger = FilingLogger(log_dir=log_dir_path)
 
     logger.log_operation(
         operation_type="GET_FILINGS_START",
@@ -307,7 +332,16 @@ def get_filings(
 
     ### GET ALL FILING FOR SPECIC DATE RANGE ###
     # Get index data once for all specified years
-    full_index_data_for_years = downloader.get_sec_index_data(start_year, end_year)
+    form_filters_for_index, cik_filters_for_index = normalize_filters(form_type_list, cik)
+    if form_filters_for_index:
+        form_filters_for_index = [_normalize_form_type(ft) for ft in form_filters_for_index]
+
+    full_index_data_for_years = downloader.get_sec_index_data(
+        start_year,
+        end_year,
+        form_filters=form_filters_for_index,
+        cik_filters=cik_filters_for_index
+    )
 
     if full_index_data_for_years.empty:
         logger.log_operation(
@@ -321,6 +355,9 @@ def get_filings(
 
     # Process each form type from the list
     for current_form_str in form_type_list:
+        normalized_form_for_download = _normalize_form_type(current_form_str)
+        is_section16_alias = current_form_str.upper() == SECTION16_ALIAS
+
         logger.log_operation(
             operation_type="FORM_TYPE_PROCESSING_START",
             cik=None,
@@ -330,9 +367,16 @@ def get_filings(
         )
 
         # Filter index data for the current form type
-        index_data_for_current_form = full_index_data_for_years[
-            full_index_data_for_years["Form Type"].str.contains(current_form_str, na=False)
-        ]
+        form_type_series = full_index_data_for_years["Form Type"].astype(str).str.strip()
+        if is_section16_alias:
+            # Section 16 filings sometimes carry leading spaces; strip before matching 3/4/5 prefixes
+            index_data_for_current_form = full_index_data_for_years[
+                form_type_series.str.startswith(SECTION16_BASE_FORMS, na=False)
+            ]
+        else:
+            index_data_for_current_form = full_index_data_for_years[
+                form_type_series.str.contains(normalized_form_for_download, na=False)
+            ]
 
         if index_data_for_current_form.empty:
             logger.log_operation(
@@ -442,7 +486,7 @@ def get_filings(
 
                 downloaded_df = downloader.download_filings(
                     cik=current_cik_str,
-                    form_type=current_form_str, 
+                    form_type=normalized_form_for_download,
                     start_year=start_year, # Still needed for fallback if index_data_subset is empty
                     end_year=end_year,   # Still needed for fallback
                     show_progress=False, 
@@ -466,8 +510,12 @@ def get_filings(
             
                 # Process downloaded filings using the unified approach
                 parser_specific_handling = False
-                if any(substring in current_form_str.upper() for substring in ["13F", "NPORT"]):
-                     parser_specific_handling = True
+                if (
+                    any(substring in current_form_str.upper() for substring in ["13F", "NPORT"])
+                    or current_form_str.upper() == SECTION16_ALIAS
+                    or str(current_form_str).startswith(SECTION16_BASE_FORMS)
+                ):
+                    parser_specific_handling = True
                 
                 if parser_specific_handling:
                     raw_files, parsed_files_data, metadata_df = process_filings_for_cik(
@@ -603,5 +651,6 @@ __all__ = [
     "SECDownloader", 
     "FilingLogger", 
     "Form13FParser",
-    "FormNPORTParser"
+    "FormNPORTParser",
+    "FormSection16Parser"
 ]

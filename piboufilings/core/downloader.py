@@ -4,7 +4,7 @@ Core functionality for downloading SEC filings.
 
 import os
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Tuple
 import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
@@ -14,6 +14,7 @@ import re
 import time
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from ..config.settings import (
     SEC_MAX_REQ_PER_SEC,
@@ -30,29 +31,100 @@ from ..config.settings import (
 from .logger import FilingLogger
 from .rate_limiter import GlobalRateLimiter
 
+SECTION16_ALIAS = "SECTION-6"
+SECTION16_BASE_FORMS = ("3", "4", "5")
+
+
+def resolve_io_paths(
+    base_dir: Optional[Union[str, Path]],
+    log_dir: Optional[Union[str, Path]],
+    raw_data_dir: Optional[Union[str, Path]],
+    default_base: Path = Path.cwd() / "data_parsed",
+) -> Tuple[Path, Path, Path]:
+    """Resolve and create base/log/raw paths once (no import-time side effects)."""
+    base_dir_path = Path(
+        base_dir if base_dir is not None else os.getenv("PIBOUFILINGS_BASE_DIR", default_base)
+    ).expanduser().resolve()
+    log_dir_path = Path(
+        log_dir if log_dir is not None else os.getenv("PIBOUFILINGS_LOG_DIR", Path.cwd() / "logs")
+    ).expanduser().resolve()
+    raw_dir_path = Path(
+        raw_data_dir
+        if raw_data_dir is not None
+        else os.getenv("PIBOUFILINGS_DATA_DIR", DATA_DIR)
+    ).expanduser().resolve()
+
+    for p in (base_dir_path, log_dir_path, raw_dir_path):
+        p.mkdir(parents=True, exist_ok=True)
+
+    return base_dir_path, log_dir_path, raw_dir_path
+
+
+def normalize_filters(
+    form_types: Optional[Union[str, List[str]]],
+    cik_values: Optional[Union[str, List[str]]]
+) -> Tuple[Optional[List[str]], Optional[List[str]]]:
+    """Normalize form and CIK filters (CIK padded to 10 digits)."""
+    form_filters: Optional[List[str]]
+    if form_types is None:
+        form_filters = None
+    elif isinstance(form_types, str):
+        form_filters = [form_types]
+    else:
+        form_filters = [str(ft) for ft in form_types]
+
+    cik_filters: Optional[List[str]]
+    if cik_values is None:
+        cik_filters = None
+    elif isinstance(cik_values, str):
+        cik_filters = [str(cik_values).zfill(10)]
+    else:
+        cik_filters = [str(c).zfill(10) for c in cik_values]
+
+    return form_filters, cik_filters
+
 class SECDownloader:
     """A class to handle downloading SEC EDGAR filings."""
     
-    def __init__(self, user_name: str, user_agent_email: str, package_version: str = "0.3.0", log_dir: str = "./logs", max_workers: int = 5):
+    def __init__(
+        self,
+        user_name: str,
+        user_agent_email: str,
+        package_version: str = "0.3.0",
+        log_dir: Union[str, Path] = "./logs",
+        max_workers: int = 5,
+        data_dir: Union[str, Path] = DATA_DIR,
+    ):
         """
         Initialize the SEC downloader.
         
         Args:
-            user_name: Name of the user or organization
-            user_agent_email: Contact email address for SEC's fair access rules (required)
+            user_name: Name of the user or organization (required, non-empty)
+            user_agent_email: Contact email address for SEC's fair access rules (required, non-empty)
             package_version: Version of the piboufilings package
             log_dir: Directory to store log files (defaults to './logs')
             max_workers: Maximum number of parallel download workers (defaults to 5)
+            data_dir: Base directory for storing raw data (defaults to DATA_DIR)
         """
+        if not user_name or not user_agent_email:
+            raise ValueError("user_name and user_agent_email are required for SEC User-Agent compliance.")
+
         self.session = self._setup_session()
         
         # Create headers with the provided user_agent
         self.headers = DEFAULT_HEADERS.copy()
         self.headers["User-Agent"] = f"piboufilings/{package_version} ({user_name}; contact: {user_agent_email})"
             
-        self.logger = FilingLogger(log_dir=log_dir)
+        log_dir_path = Path(log_dir).expanduser().resolve()
+        log_dir_path.mkdir(parents=True, exist_ok=True)
+        self.logger = FilingLogger(log_dir=log_dir_path)
         self.last_request_time = time.time() - REQUEST_DELAY  # Initialize to allow immediate first request
         self.max_workers = max_workers
+        self.data_dir = Path(data_dir).expanduser().resolve()
+
+        self.raw_root = self.data_dir
+        self.raw_root.mkdir(parents=True, exist_ok=True)
+        self.cache_dir = self.data_dir / "cache"
         
         # Initialize the global rate limiter
         self.rate_limiter = GlobalRateLimiter(
@@ -89,6 +161,8 @@ class SECDownloader:
         try:
             # Normalize CIK
             cik = str(cik).zfill(10)
+            form_type_str = str(form_type)
+            is_section16_alias_request = form_type_str.upper() == SECTION16_ALIAS
             
             company_filings: pd.DataFrame
             
@@ -98,10 +172,18 @@ class SECDownloader:
                 # Ensure the subset is indeed for the given CIK and form_type as a safeguard, though
                 # the caller should ideally ensure this.
                 # This filtering on the subset is a light check.
-                company_filings = company_filings[
-                    (company_filings["CIK"] == cik) &
-                    (company_filings["Form Type"].str.contains(form_type, na=False))
-                ]
+                company_filings = company_filings[company_filings["CIK"] == cik]
+                if is_section16_alias_request:
+                    company_filings = company_filings[
+                        company_filings["Form Type"]
+                        .astype(str)
+                        .str.strip()
+                        .str.startswith(SECTION16_BASE_FORMS, na=False)
+                    ]
+                else:
+                    company_filings = company_filings[
+                        company_filings["Form Type"].str.contains(form_type_str, na=False)
+                    ]
                 if company_filings.empty:
                     self.logger.log_operation(
                         cik=cik,
@@ -113,7 +195,12 @@ class SECDownloader:
 
             else:
                 # Fetch index data if subset is not provided or is empty
-                index_data = self.get_sec_index_data(start_year, end_year)
+                index_data = self.get_sec_index_data(
+                    start_year,
+                    end_year,
+                    form_filters=[form_type_str],
+                    cik_filters=[cik]
+                )
                 
                 if index_data.empty:
                     self.logger.log_operation(
@@ -125,10 +212,18 @@ class SECDownloader:
                     return pd.DataFrame()
 
                 # Filter for the specific company and form type
-                company_filings = index_data[
-                    (index_data["CIK"] == cik) & 
-                    (index_data["Form Type"].str.contains(form_type, na=False))
-                ]
+                company_filings = index_data[index_data["CIK"] == cik]
+                if is_section16_alias_request:
+                    company_filings = company_filings[
+                        company_filings["Form Type"]
+                        .astype(str)
+                        .str.strip()
+                        .str.startswith(SECTION16_BASE_FORMS, na=False)
+                    ]
+                else:
+                    company_filings = company_filings[
+                        company_filings["Form Type"].str.contains(form_type_str, na=False)
+                    ]
             
             if company_filings.empty:
                 self.logger.log_operation(
@@ -235,6 +330,11 @@ class SECDownloader:
         """Ensure requests comply with SEC rate limits using the global rate limiter."""
         # Use the global rate limiter to control request rate
         self.rate_limiter.acquire(block=True)
+
+    def _get(self, url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> requests.Response:
+        """Unified GET with rate limit and timeout."""
+        self._respect_rate_limit()
+        return self.session.get(url, headers=headers or self.headers, timeout=timeout)
     
     def _download_single_filing(
         self,
@@ -261,11 +361,7 @@ class SECDownloader:
             clean_accession = accession_number.replace('-', '')
             url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_accession}/{accession_number}.txt"
             
-            # Apply rate limiting before making the request
-            self._respect_rate_limit()
-            
-            # Download the filing
-            response = self.session.get(url, headers=self.headers)
+            response = self._get(url)
             # Log the request details regardless of success/failure
             # self.logger.log_operation( ... ) # Consider adding a generic request log here if needed
             
@@ -371,18 +467,16 @@ class SECDownloader:
         Raises:
             IOError: If there is an error creating directories or writing the file
         """
-        # Ensure DATA_DIR exists
-        os.makedirs(DATA_DIR, exist_ok=True)
-        os.makedirs(os.path.join(DATA_DIR, "raw"), exist_ok=True)
+        raw_root = self.raw_root
         
         # Determine primary directory based on form type
         primary_identifier_dir: str
         if "13F" in form_type and form_13f_file_number_for_path and form_13f_file_number_for_path != "unknown_13F_file_number":
             # Sanitize form_13f_file_number_for_path for use as a directory name
             sane_form_13f_fn = form_13f_file_number_for_path.replace('-', '_').replace('/', '_')
-            primary_identifier_dir = os.path.join(DATA_DIR, "raw", sane_form_13f_fn)
+            primary_identifier_dir = os.path.join(raw_root, sane_form_13f_fn)
         else:
-            primary_identifier_dir = os.path.join(DATA_DIR, "raw", cik)
+            primary_identifier_dir = os.path.join(raw_root, cik)
         
         #Check if this is an exhibit filing
         is_exhibit = "EX" in form_type
@@ -432,7 +526,9 @@ class SECDownloader:
     def get_sec_index_data(
         self,
         start_year: int = 1999,
-        end_year: Optional[int] = None
+        end_year: Optional[int] = None,
+        form_filters: Optional[List[str]] = None,
+        cik_filters: Optional[List[str]] = None
     ) -> pd.DataFrame:
         """
         Get SEC EDGAR index data for the specified year range.
@@ -447,7 +543,9 @@ class SECDownloader:
         try:
             if end_year is None:
                 end_year = datetime.today().year
-                
+
+            form_filters, cik_filters = normalize_filters(form_filters, cik_filters)
+            
             all_reports = []
             for year in range(start_year, end_year + 1):
                 for quarter in range(1, 5):
@@ -457,10 +555,7 @@ class SECDownloader:
                     if year > current_year or (year == current_year and quarter > current_quarter):
                         continue
                         
-                    # Apply rate limiting before making the request
-                    self._respect_rate_limit()
-                    
-                    df = self._parse_form_idx(year, quarter)
+                    df = self._parse_form_idx(year, quarter, form_filters=form_filters, cik_filters=cik_filters)
                     if not df.empty:
                         all_reports.append(df)
                         
@@ -506,7 +601,13 @@ class SECDownloader:
                 "accession_number", "Filename"
             ])
     
-    def _parse_form_idx(self, year: int, quarter: int) -> pd.DataFrame:
+    def _parse_form_idx(
+        self,
+        year: int,
+        quarter: int,
+        form_filters: Optional[List[str]] = None,
+        cik_filters: Optional[List[str]] = None
+    ) -> pd.DataFrame:
         """
         Parse a specific quarter's form index file.
         
@@ -519,22 +620,35 @@ class SECDownloader:
         """
         try:
             url = f"https://www.sec.gov/Archives/edgar/full-index/{year}/QTR{quarter}/form.idx"
-            
-            # Apply rate limiting before making the request
-            self._respect_rate_limit()
-            
-            response = self.session.get(url, headers=self.headers)
-            
-            if response.status_code != 200:
-                self.logger.log_operation(
-                    operation_type="INDEX_FETCH_PARTIAL_HTTP_ERROR",
-                    download_success=False,
-                    download_error_message=f"Failed to retrieve index for {year} Q{quarter}: HTTP {response.status_code}",
-                    error_code=response.status_code
-                )
-                return pd.DataFrame()
+            cache_path = self.cache_dir / f"form_{year}_Q{quarter}.idx"
+            text_data = None
+
+            if cache_path.exists():
+                try:
+                    text_data = cache_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    text_data = None
+
+            if text_data is None:
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                response = self._get(url)
                 
-            lines = response.text.splitlines()
+                if response.status_code != 200:
+                    self.logger.log_operation(
+                        operation_type="INDEX_FETCH_PARTIAL_HTTP_ERROR",
+                        download_success=False,
+                        download_error_message=f"Failed to retrieve index for {year} Q{quarter}: HTTP {response.status_code}",
+                        error_code=response.status_code
+                    )
+                    return pd.DataFrame()
+                text_data = response.text
+                try:
+                    cache_path.write_text(text_data, encoding="utf-8")
+                except Exception:
+                    # Cache failures are non-fatal
+                    pass
+            
+            lines = text_data.splitlines()
             try:
                 start_idx = next(i for i, line in enumerate(lines) if set(line.strip()) == {'-'})
             except StopIteration:
@@ -551,10 +665,34 @@ class SECDownloader:
                     if len(line) < 98:  # Ensure minimum line length
                         continue
                         
+                    form_type_val = line[0:12].strip()
+                    cik_val_raw = line[74:86].strip()
+                    cik_val_padded = cik_val_raw.zfill(10)
+
+                    # Form filter handling (Section16 alias uses prefix match)
+                    if form_filters:
+                        matches_form = False
+                        for f in form_filters:
+                            if f is None:
+                                continue
+                            f_upper = str(f).upper()
+                            if f_upper == SECTION16_ALIAS:
+                                if form_type_val.startswith(SECTION16_BASE_FORMS):
+                                    matches_form = True
+                                    break
+                            elif f_upper in form_type_val.upper():
+                                matches_form = True
+                                break
+                        if not matches_form:
+                            continue
+
+                    if cik_filters and cik_val_padded not in cik_filters:
+                        continue
+
                     entry = {
-                        "Form Type": line[0:12].strip(),
+                        "Form Type": form_type_val,
                         "Name": line[12:74].strip(),
-                        "CIK": line[74:86].strip(),
+                        "CIK": cik_val_padded,
                         "Date Filed": line[86:98].strip(),
                         "Filename": line[98:].strip()
                     }
@@ -594,7 +732,8 @@ class SECDownloader:
             read=MAX_RETRIES,     # Retry on read errors (like IncompleteRead)
             backoff_factor=BACKOFF_FACTOR,
             status_forcelist=RETRY_STATUS_CODES,
-            allowed_methods=["GET"]
+            respect_retry_after_header=True,
+            allowed_methods={"GET"}
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         session.mount("https://", adapter)

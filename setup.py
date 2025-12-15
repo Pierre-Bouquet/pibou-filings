@@ -4,7 +4,7 @@ setup(
     name="piboufilings",
     version="0.3.0",
     description="A Python library for downloading and parsing SEC EDGAR filings",
-    long_description=open("README.md").read(),
+    long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="Pierre Bouquet",
     author_email="pierrebouquet73000@gmail.com",
@@ -36,4 +36,6 @@ setup(
         "Bug Reports": "https://github.com/pibou/piboufilings/issues",
         "Source": "https://github.com/pibou/piboufilings",
     },
+    license="Non-Commercial",
+    license_files=["LICENCE"],
 )
