@@ -392,7 +392,8 @@ def test_nport_dedup_prefers_row_with_cusip(tmp_path):
     holdings_path = tmp_path / "nport_holdings.csv"
     df = pd.read_csv(holdings_path)
     assert len(df) == 1
-    assert df.iloc[0]["CUSIP"] == "111111111"
+    # Cast to string to be robust to pandas dtype inference (int vs. object)
+    assert str(df.iloc[0]["CUSIP"]) == "111111111"
 
 
 def test_section16_parser_merges_footnotes_and_flags(tmp_path):
