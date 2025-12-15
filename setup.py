@@ -8,7 +8,7 @@ setup(
     long_description_content_type="text/markdown",
     author="Pierre Bouquet",
     author_email="pierrebouquet73000@gmail.com",
-    url="https://github.com/pibou/piboufilings",
+    url="https://github.com/Pierre-Bouquet/pibou-filings",
     packages=find_packages(),
     install_requires=[
         "pandas>=1.3.0",
@@ -38,8 +38,8 @@ setup(
     ],
     keywords="sec, edgar, filings, financial, 13f, parser",
     project_urls={
-        "Bug Reports": "https://github.com/pibou/piboufilings/issues",
-        "Source": "https://github.com/pibou/piboufilings",
+        "Bug Reports": "https://github.com/Pierre-Bouquet/pibou-filings/issues",
+        "Source": "https://github.com/Pierre-Bouquet/pibou-filings",
     },
     license="Non-Commercial",
     license_files=["LICENCE"],
