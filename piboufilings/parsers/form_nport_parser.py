@@ -663,13 +663,36 @@ class FormNPORTParser:
         columns = list(df.columns)
         records: Dict[Any, Dict[str, Any]] = {}
 
+        def _is_missing(val: Any) -> bool:
+            """Treat pandas NA, NaN, None, empty string, and '<NA>'/ 'nan' as missing."""
+            if val is None:
+                return True
+            # pd.isna handles NaN and pandas.NA
+            try:
+                if pd.isna(val):
+                    return True
+            except TypeError:
+                # Non-numeric, non-array
+                pass
+            if isinstance(val, str):
+                stripped = val.strip().upper()
+                if stripped in ("", "<NA>", "NAN"):
+                    return True
+            return False
+
         def norm_key(row_dict: Dict[str, Any]) -> Any:
-            return tuple(None if pd.isna(row_dict.get(k, pd.NA)) else row_dict.get(k, pd.NA) for k in key_cols)
+            key_parts: List[Any] = []
+            for k in key_cols:
+                v = row_dict.get(k, pd.NA)
+                key_parts.append(None if _is_missing(v) else v)
+            return tuple(key_parts)
 
         def prefer(new: Dict[str, Any], current: Dict[str, Any]) -> bool:
             cur_cusip = current.get("CUSIP", pd.NA)
             new_cusip = new.get("CUSIP", pd.NA)
-            return (pd.isna(cur_cusip) or cur_cusip in ("", None)) and (not pd.isna(new_cusip) and new_cusip not in ("", None))
+            cur_missing = _is_missing(cur_cusip)
+            new_present = not _is_missing(new_cusip)
+            return cur_missing and new_present
 
         def add_row(row_dict: Dict[str, Any]) -> None:
             key = norm_key(row_dict)
