@@ -5,6 +5,10 @@
 [![PyPI](https://img.shields.io/pypi/v/piboufilings?color=blue)](https://pypi.org/project/piboufilings/)
 [![License](https://img.shields.io/badge/License-Non_Commercial-blue)](./LICENCE)
 [![Downloads](https://img.shields.io/pepy/dt/piboufilings?color=blue)](https://pepy.tech/projects/piboufilings)
+[![Open In Google Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/14CGkio1NVXI6pkuPliAmdBL4sT8u6H-t#scrollTo=wk3GmLlhbidZ)
+
+---
+
 
 ## Filing Contents at a Glance
 
